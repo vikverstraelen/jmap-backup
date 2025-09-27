@@ -1,0 +1,182 @@
+import click
+import os
+
+from slugify import slugify
+
+from jmap_backup.tiny_jmap import TinyJMAPClient
+from jmap_backup.utils import read_state, write_state, build_message, download_blob, write_eml_file
+
+DATA_DIR = os.environ["DATA_DIR"]
+
+@click.group()
+@click.version_option()
+def cli():
+    "A CLI tool to backup a mailbox using the JMAP protocol"
+
+
+@cli.command(name="top-n")
+@click.option(
+    "-n",
+    default=10,
+    help="Number of messages to show (default: 10)",
+)
+def top_n(n):
+    "Command description goes here"
+    client = TinyJMAPClient(
+        hostname=os.environ.get("JMAP_HOSTNAME", "api.fastmail.com"),
+        username=os.environ.get("JMAP_USERNAME"),
+        token=os.environ.get("JMAP_TOKEN"),
+    )
+
+@cli.command(name="sync-mailbox")
+@click.option(
+    "-m",
+    "--mailbox",
+    required=True,
+    help="Name of the mailbox to sync",
+)
+@click.option(
+    "-s",
+    "--state-file",
+    default="jmap_state.json",
+    help="Path to the state file (default: jmap_state.json)",
+)
+def sync_mailbox(mailbox, state_file):
+    "Sync a mailbox"
+    client = TinyJMAPClient(
+        hostname=os.environ.get("JMAP_HOSTNAME", "api.fastmail.com"),
+        username=os.environ.get("JMAP_USERNAME"),
+        token=os.environ.get("JMAP_TOKEN"),
+    )
+    account_id = client.get_account_id()
+    mailbox_list = client.make_jmap_call(
+        {
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [
+                [
+                    "Mailbox/query",
+                    {
+                        "accountId": account_id,
+                        "filter": {"name": mailbox},
+                    },
+                    "0",
+                ]
+            ],
+        }
+    )
+    print(mailbox_list)
+    if len(mailbox_list['methodResponses'][0][1]['ids']) == 0:
+        print(f"Mailbox '{mailbox}' not found")
+        return
+    mailbox_id = mailbox_list['methodResponses'][0][1]['ids'][0]
+    print(f"Mailbox ID: {mailbox_id}")
+    
+    state = read_state(state_file)
+
+    if mailbox not in state:
+        state[mailbox] = {"state": "null", "position": 0}
+
+    if state[mailbox]["state"] == "null":
+        print("No previous state found, performing full sync")
+
+        print(f"Starting at position {state[mailbox]["position"]}")
+        
+        more_items = True
+        while more_items:
+            email_res = client.make_jmap_call(
+                {
+                    "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+                    "methodCalls": [
+                        [ 
+                            "Email/query", {
+                                "accountId": account_id,
+                                "filter": {
+                                    "inMailbox": mailbox_id
+                                },
+                                "sort": [{
+                                    "property": "receivedAt",
+                                    "isAscending": True
+                                }],
+                                "position": state[mailbox]["position"],
+                                "collapseThreads": False,
+                                "limit": 100,
+                                "calculateTotal": True
+                            }, 
+                            "0" 
+                        ],
+                        [ 
+                            "Email/get", {
+                                "accountId": account_id,
+                                "#ids": {
+                                    "name": "Email/query",
+                                    "path": "/ids",
+                                    "resultOf": "0"
+                                },
+                                "properties": [ "bodyStructure", "bodyValues", "threadId", "subject", "from", "receivedAt"],
+                                "bodyProperties": [ "partId", "blobId", "name", "headers", "type"],
+                                "fetchAllBodyValues": True,
+                            }, 
+                            "1" 
+                        ]
+                    ]
+                }
+            )
+            print(f"Fetched {len(email_res['methodResponses'][1][1]['list'])} emails")
+            if len(email_res['methodResponses'][1][1]['list']) == 0:
+                print("No more emails to fetch")
+                more_items = False
+                state[mailbox]["state"] = email_res['methodResponses'][0][1]['queryState']
+                write_state(state_file, state)
+                break
+            for email in email_res['methodResponses'][1][1]['list']:
+                print(f"Processing email from: {email['from']}, subject: {email['subject']}")
+                msg = build_message(email, client)
+                write_eml_file(msg, f"{DATA_DIR}/{mailbox}/{slugify(email["from"][0]["email"])}/{slugify(email["threadId"])}/{slugify(email["receivedAt"])}-{slugify(email["subject"])}-{slugify(email["id"])}.eml")
+                state[mailbox]["position"] += 1
+                write_state(state_file, state)
+    else:
+        print("Previous state found, performing incremental sync")
+        email_res = client.make_jmap_call(
+            {
+                "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+                "methodCalls": [
+                    [ 
+                        "Email/queryChanges", {
+                            "accountId": account_id,
+                            "filter": {
+                                "inMailbox": mailbox_id
+                            },
+                            "sort": [{
+                                "property": "receivedAt",
+                                "isAscending": True
+                            }],
+                            "sinceQueryState": state[mailbox]["state"],
+                            "collapseThreads": False,
+                            "calculateTotal": True
+                        }, 
+                        "0" 
+                    ],
+                    [ 
+                        "Email/get", {
+                            "accountId": account_id,
+                            "#ids": {
+                                "name": "Email/queryChanges",
+                                "path": "/added/*/id",
+                                "resultOf": "0"
+                            },
+                            "properties": [ "bodyStructure", "bodyValues", "threadId", "subject", "from", "receivedAt"],
+                            "bodyProperties": [ "partId", "blobId", "name", "headers", "type"],
+                            "fetchAllBodyValues": True,
+                        }, 
+                        "1" 
+                    ]
+                ]
+            }
+        )
+        print(f"Fetched {len(email_res['methodResponses'][1][1]['list'])} emails")
+        for email in email_res['methodResponses'][1][1]['list']:
+            print(f"Processing email from: {email['from']}, subject: {email['subject']}")
+            msg = build_message(email, client)
+            write_eml_file(msg, f"{DATA_DIR}/{mailbox}/{slugify(email["from"][0]["email"])}/{slugify(email["threadId"])}/{slugify(email["receivedAt"])}-{slugify(email["subject"])}-{slugify(email["id"])}.eml")
+            state[mailbox]["state"] = email_res['methodResponses'][0][1]['newQueryState']
+            write_state(state_file, state)

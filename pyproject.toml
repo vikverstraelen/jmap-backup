@@ -1,0 +1,36 @@
+[project]
+name = "jmap-backup"
+version = "0.1"
+description = "A CLI tool to backup a mailbox using the JMAP protocol"
+readme = "README.md"
+authors = [{name = "Viktor Verstraelen"}]
+license = "Apache-2.0"
+requires-python = ">=3.8"
+classifiers = []
+dependencies = [
+    "click",
+    "requests",
+    "python-slugify",
+    "pathlib>=1.0.1",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/vikverstraelen/jmap-backup"
+Changelog = "https://github.com/vikverstraelen/jmap-backup/releases"
+Issues = "https://github.com/vikverstraelen/jmap-backup/issues"
+CI = "https://github.com/vikverstraelen/jmap-backup/actions"
+
+[project.scripts]
+jmap-backup = "jmap_backup.cli:cli"
+
+[project.optional-dependencies]
+test = ["pytest"]
