@@ -8,12 +8,15 @@ from urllib.parse import quote_plus
 from slugify import slugify
 from base64 import b64encode
 from pathlib import Path
+import structlog
 
 from textwrap import wrap
 import re
 import json
 
 from jmap_backup.tiny_jmap import TinyJMAPClient
+
+logger = structlog.get_logger()
 
 def download_blob(blob_id, name, full_type, client):
     account_id = client.get_account_id()
@@ -22,7 +25,7 @@ def download_blob(blob_id, name, full_type, client):
         .replace("{blobId}", blob_id)            \
         .replace("{name}", slugify(name))                 \
         .replace("{type}", full_type)
-    print(f"Downloading attachment from {download_url}")
+    logger.info(f"Downloading attachment", url=download_url)
     r = Request(
         download_url, 
         headers={
@@ -87,6 +90,6 @@ def write_state(state_file, state):
 def write_eml_file(msg, filename):
     output_file = Path(filename)
     output_file.parent.mkdir(exist_ok=True, parents=True)
-    with open(filename, 'w') as file:
+    with output_file.open('w') as file:
         emlGenerator = generator.Generator(file)
         emlGenerator.flatten(msg)

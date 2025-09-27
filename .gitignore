@@ -9,5 +9,5 @@ venv
 .DS_Store
 .env
 debug/
-
+appdata/
 

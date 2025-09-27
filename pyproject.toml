@@ -12,6 +12,7 @@ dependencies = [
     "requests",
     "python-slugify",
     "pathlib>=1.0.1",
+    "structlog>=25.4.0",
 ]
 
 [build-system]
